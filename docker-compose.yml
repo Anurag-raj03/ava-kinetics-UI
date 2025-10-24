@@ -1,0 +1,42 @@
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile.Backend
+    container_name: ava_fastapi
+    ports:
+      - "8000:8000"   # FastAPI
+      - "5001:5001"   # Flask webhook
+    env_file:
+      - .env
+    networks:
+      - ava_network
+    volumes:
+      - ./processing_pipeline:/app/processing_pipeline
+      - ./proposal_generation_pipeline:/app/proposal_generation_pipeline
+      - ./ava_dep:/app/ava_dep
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: ava_streamlit
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - FASTAPI_URL=http://fastapi:8000
+    depends_on:
+      - fastapi
+    networks:
+      - ava_network
+    volumes:
+      - ./frontend:/app/frontend
+      - ./processing_pipeline:/app/processing_pipeline
+      - ./proposal_generation_pipeline:/app/proposal_generation_pipeline
+      - ./ava_dep:/app/ava_dep
+
+networks:
+  ava_network:
+    driver: bridge
