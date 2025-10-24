@@ -153,9 +153,6 @@ class CVATClient:
     # -------------------------
     # Task creation from S3
     # -------------------------
-    # -------------------------
-    # Task creation from S3 (fixed)
-    # -------------------------
     def create_tasks_from_selected_s3_files(self, project_id: int, batch_name: str, zip_files: List[str], annotators: Optional[List[str]] = None) -> List[Dict]:
         """
         Create CVAT tasks from S3 files without downloading locally.
@@ -164,7 +161,8 @@ class CVATClient:
         results = []
 
         for idx, zip_file in enumerate(zip_files):
-            base_name = Path(zip_file).stem
+            base_name = Path(zip_file).stem  # e.g., factory_batch_01_annotator1_keyframes
+            annot_base = base_name.replace("_keyframes", "")  # e.g., factory_batch_01_annotator1
             annotator = annotators[idx] if annotators and idx < len(annotators) else "default"
 
             task_name = base_name
@@ -174,7 +172,7 @@ class CVATClient:
 
             # Construct S3 URLs for CVAT to pull directly
             zip_s3_url = f"s3://{self.s3_bucket}/{batch_name}/frames/{zip_file}"
-            xml_s3_url = f"s3://{self.s3_bucket}/{batch_name}/annotations/{base_name}_annotations.xml"
+            xml_s3_url = f"s3://{self.s3_bucket}/{batch_name}/annotations/{annot_base}_annotations.xml"
 
             # Upload data (tell CVAT to use remote S3)
             data_resp = self._make_authenticated_request(
@@ -203,6 +201,7 @@ class CVATClient:
             logger.info(f"✓ Created CVAT task '{task_name}' for annotator '{annotator}'")
 
         return results
+
 
     def create_project_and_add_tasks_from_s3(self, project_name: str, batch_name: str, zip_files: Optional[List[str]] = None, annotators: Optional[List[str]] = None) -> Optional[Dict]:
         logger.info(f"Creating new CVAT project '{project_name}' (S3 mode)...")
