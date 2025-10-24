@@ -153,40 +153,55 @@ class CVATClient:
     # -------------------------
     # Task creation from S3
     # -------------------------
-    def create_tasks_from_selected_s3_files(
-        self, project_id: int, batch_name: str, zip_files: List[str], annotators: Optional[List[str]] = None
-    ) -> List[Dict]:
+    # -------------------------
+    # Task creation from S3 (fixed)
+    # -------------------------
+    def create_tasks_from_selected_s3_files(self, project_id: int, batch_name: str, zip_files: List[str], annotators: Optional[List[str]] = None) -> List[Dict]:
+        """
+        Create CVAT tasks from S3 files without downloading locally.
+        Assumes CVAT has access to the S3 bucket (cloud storage mode).
+        """
         results = []
-        temp_dir = tempfile.mkdtemp()
 
         for idx, zip_file in enumerate(zip_files):
-            zip_key = f"{batch_name}/frames/{zip_file}"
             base_name = Path(zip_file).stem
             annotator = annotators[idx] if annotators and idx < len(annotators) else "default"
-            xml_key = f"{batch_name}/annotations/{base_name}_annotations.xml"
-
-            try:
-                zip_path = self.download_s3_file(zip_key, temp_dir)
-                xml_path = self.download_s3_file(xml_key, temp_dir)
-            except Exception as e:
-                logger.error(f"Download failed for {zip_key}: {e}")
-                continue
 
             task_name = base_name
             task_id = self.create_task(task_name, project_id)
             if not task_id:
                 continue
-            if not self.upload_data_to_task(task_id, zip_path):
-                continue
-            if not self.import_annotations(task_id, xml_path):
-                continue
-            if not self.assign_user_to_task(task_id, annotator):
+
+            # Construct S3 URLs for CVAT to pull directly
+            zip_s3_url = f"s3://{self.s3_bucket}/{batch_name}/frames/{zip_file}"
+            xml_s3_url = f"s3://{self.s3_bucket}/{batch_name}/annotations/{base_name}_annotations.xml"
+
+            # Upload data (tell CVAT to use remote S3)
+            data_resp = self._make_authenticated_request(
+                "POST",
+                f"{self.host}/api/tasks/{task_id}/data",
+                json={"remote_files": [zip_s3_url], "image_quality": 95}
+            )
+            if data_resp.status_code != 202:
+                logger.error(f"Data upload failed for task {task_id}: {data_resp.text}")
                 continue
 
-            results.append({'task_id': task_id, 'task_name': task_name, 'annotator': annotator})
-            logger.info(f"✓ Completed CVAT task for {annotator}")
+            # Import annotations (remote URL)
+            annot_resp = self._make_authenticated_request(
+                "POST",
+                f"{self.host}/api/tasks/{task_id}/annotations?action=upload&format=CVAT%201.1",
+                json={"remote_files": [xml_s3_url]}
+            )
+            if annot_resp.status_code not in (201, 202):
+                logger.error(f"Annotation upload failed for task {task_id}: {annot_resp.text}")
+                continue
 
-        shutil.rmtree(temp_dir, ignore_errors=True)
+            # Assign user
+            self.assign_user_to_task(task_id, annotator)
+
+            results.append({"task_id": task_id, "task_name": task_name, "annotator": annotator})
+            logger.info(f"✓ Created CVAT task '{task_name}' for annotator '{annotator}'")
+
         return results
 
     def create_project_and_add_tasks_from_s3(self, project_name: str, batch_name: str, zip_files: Optional[List[str]] = None, annotators: Optional[List[str]] = None) -> Optional[Dict]:
