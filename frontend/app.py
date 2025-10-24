@@ -464,24 +464,22 @@ with tab_qc:
                 "output_filename": output_filename,
             }
             with st.spinner("Generating dataset..."):
-                result = call_api("POST", "/qc/generate_dataset", json_data=payload)
-                if result:
-                    st.success(f"✅ Dataset generated: `{result['filename']}`")
+                # Use streaming to get the CSV file content
+                url = f"{BACKEND_URL}/qc/generate_dataset"
+                try:
+                    response = requests.post(url, json=payload)
+                    response.raise_for_status()
+                    st.success(f"✅ Dataset generated: `{output_filename}`")
                     
-                    # ==========================
-                    # Download Button
-                    # ==========================
-                    csv_file_path = Path(result["filename"])
-                    if csv_file_path.exists():
-                        with open(csv_file_path, "rb") as f:
-                            st.download_button(
-                                label="⬇️ Download Dataset CSV",
-                                data=f,
-                                file_name=csv_file_path.name,
-                                mime="text/csv"
-                            )
-                    else:
-                        st.warning("⚠️ CSV file not found locally. Make sure backend saves it in the same path as frontend.")
+                    # Download button using bytes from backend
+                    st.download_button(
+                        label="⬇️ Download Dataset CSV",
+                        data=response.content,
+                        file_name=output_filename,
+                        mime="text/csv"
+                    )
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Failed to generate dataset: {e}")
 
 # ==========================================================
 # 🧩 TAB 2: CVAT TASK CREATOR (S3)

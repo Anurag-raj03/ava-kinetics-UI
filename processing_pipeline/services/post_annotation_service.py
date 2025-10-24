@@ -24,16 +24,18 @@ load_dotenv()
 
 # --------------------- Database & CVAT Credentials ---------------------
 DB_PARAMS = {
-    "dbname": os.getenv("DB_NAME"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASS"),
-    "host": os.getenv("DB_HOST"),
-    "port": os.getenv("DB_PORT")
+    "dbname": os.getenv("CVAT_DB_NAME"),
+    "user": os.getenv("CVAT_DB_USER"),
+    "password": os.getenv("CVAT_DB_PASSWORD"),
+    "host": os.getenv("CVAT_DB_HOST"),
+    "port": os.getenv("CVAT_DB_PORT")
 }
 
+
 CVAT_HOST = os.getenv("CVAT_HOST")
-CVAT_USERNAME = os.getenv("CVAT_USER")
-CVAT_PASSWORD = os.getenv("CVAT_PASS")
+CVAT_USERNAME = os.getenv("CVAT_USERNAME")  # match .env
+CVAT_PASSWORD = os.getenv("CVAT_PASSWORD")  # match .env
+
 
 # --------------------- PostAnnotationService ---------------------
 class PostAnnotationService:
