@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import tempfile
 import time
-import shutil
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -151,18 +150,27 @@ class CVATClient:
         return local_path
 
     # -------------------------
+    # Generate presigned URL for CVAT
+    # -------------------------
+    def generate_presigned_url(self, key: str, expiration: int = 3600) -> str:
+        if not self.s3_client or not self.s3_bucket:
+            raise RuntimeError("S3 client or bucket not configured.")
+        url = self.s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': self.s3_bucket, 'Key': key},
+            ExpiresIn=expiration
+        )
+        return url
+
+    # -------------------------
     # Task creation from S3
     # -------------------------
     def create_tasks_from_selected_s3_files(self, project_id: int, batch_name: str, zip_files: List[str], annotators: Optional[List[str]] = None) -> List[Dict]:
-        """
-        Create CVAT tasks from S3 files without downloading frames locally.
-        Downloads annotation XML locally to ensure proper upload.
-        """
         results = []
 
         for idx, zip_file in enumerate(zip_files):
-            base_name = Path(zip_file).stem  # e.g., factory_batch_01_annotator1_keyframes
-            annot_base = base_name.replace("_keyframes", "")  # e.g., factory_batch_01_annotator1
+            base_name = Path(zip_file).stem
+            annot_base = base_name.replace("_keyframes", "")
             annotator = annotators[idx] if annotators and idx < len(annotators) else "default"
 
             task_name = base_name
@@ -170,14 +178,15 @@ class CVATClient:
             if not task_id:
                 continue
 
-            # Construct S3 URL for frames (CVAT can pull directly)
-            zip_s3_url = f"s3://{self.s3_bucket}/{batch_name}/frames/{zip_file}"
+            # Use presigned HTTPS URL
+            zip_s3_key = f"{batch_name}/frames/{zip_file}"
+            zip_https_url = self.generate_presigned_url(zip_s3_key)
 
             # Upload frames (remote)
             data_resp = self._make_authenticated_request(
                 "POST",
                 f"{self.host}/api/tasks/{task_id}/data",
-                json={"remote_files": [zip_s3_url], "image_quality": 95}
+                json={"remote_files": [zip_https_url], "image_quality": 95}
             )
             if data_resp.status_code != 202:
                 logger.error(f"Data upload failed for task {task_id}: {data_resp.text}")
@@ -201,8 +210,6 @@ class CVATClient:
 
         return results
 
-
-
     def create_project_and_add_tasks_from_s3(self, project_name: str, batch_name: str, zip_files: Optional[List[str]] = None, annotators: Optional[List[str]] = None) -> Optional[Dict]:
         logger.info(f"Creating new CVAT project '{project_name}' (S3 mode)...")
         project_id = self.create_project(project_name, get_default_labels())
@@ -212,7 +219,7 @@ class CVATClient:
         if zip_files:
             results = self.create_tasks_from_selected_s3_files(project_id, batch_name, zip_files, annotators)
         else:
-            results = []  # fallback empty
+            results = []
 
         return {"project_id": project_id, "tasks_created": results}
 
