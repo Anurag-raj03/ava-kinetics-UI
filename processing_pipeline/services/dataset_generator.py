@@ -1,3 +1,4 @@
+# services/dataset_generator.py
 import psycopg2
 import pandas as pd
 import logging
@@ -21,7 +22,6 @@ ATTRIBUTE_DEFINITIONS = {
     "team_interaction": {"options": ["working_alone", "pair_work", "small_team", "large_group", "supervisor_present"]},
 }
 
-
 def calculate_action_mapping() -> Dict[str, int]:
     mapping = {}
     cumulative_count = 0
@@ -29,7 +29,6 @@ def calculate_action_mapping() -> Dict[str, int]:
         mapping[attr_name] = cumulative_count
         cumulative_count += len(ATTRIBUTE_DEFINITIONS[attr_name]["options"])
     return mapping
-
 
 class DatasetGenerator:
     def __init__(self, db_params: Dict[str, Any], manifest_path: str, project_id: int):
@@ -40,7 +39,6 @@ class DatasetGenerator:
         self.action_id_map = calculate_action_mapping()
         self.conn = None
 
-    # NEW FUNCTION — handles both local & S3
     def _load_manifest(self, manifest_path: str):
         """Load manifest from local path or directly from S3."""
         if manifest_path.startswith("s3://"):
@@ -81,7 +79,6 @@ class DatasetGenerator:
             AND t.project_id = %s;
             """
             df = pd.read_sql(query, self.conn, params=(self.project_id,))
-
             if df.empty:
                 logger.warning(f"⚠️ No 'approved' annotations found for Project ID {self.project_id}.")
                 return
@@ -129,7 +126,6 @@ class DatasetGenerator:
             ava_df = pd.DataFrame(ava_rows, columns=header)
             ava_df.sort_values(by=["video_id", "frame_timestamp", "person_id"], inplace=True)
             ava_df.to_csv(output_path, index=False)
-
             logger.info(f"✅ Successfully generated AVA-Kinetics dataset with {len(ava_df)} rows at: {output_path}")
         finally:
             self.close_db()

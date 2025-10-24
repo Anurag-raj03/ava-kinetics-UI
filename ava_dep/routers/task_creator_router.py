@@ -1,20 +1,43 @@
+# services/cvat_s3_router.py
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Dict, List
+from typing import Dict
+from dotenv import load_dotenv
+import os
 from processing_pipeline.services.cvat_integration import CVATClient
+
+# ==========================================================
+# Load .env variables
+# ==========================================================
+load_dotenv()
+
+DEFAULT_CVAT_HOST = os.getenv("CVAT_HOST", "http://localhost:8080")
+DEFAULT_CVAT_USERNAME = os.getenv("CVAT_USERNAME", "admin")
+DEFAULT_CVAT_PASSWORD = os.getenv("CVAT_PASSWORD", "admin")
+DEFAULT_S3_BUCKET = os.getenv("AWS_STORAGE_BUCKET_NAME", "cvat-data-uploader")
 
 router = APIRouter()
 
+# ==========================================================
+# Request Schema
+# ==========================================================
 class CVATS3ConfigRequest(BaseModel):
-    host: str
-    username: str
-    password: str
-    s3_bucket: str
+    host: str = DEFAULT_CVAT_HOST
+    username: str = DEFAULT_CVAT_USERNAME
+    password: str = DEFAULT_CVAT_PASSWORD
+    s3_bucket: str = DEFAULT_S3_BUCKET
     project_name: str
     batch_name: str
 
+# ==========================================================
+# Endpoint
+# ==========================================================
 @router.post("/create_project_and_tasks_s3")
 def create_cvat_project_and_tasks_s3(request: CVATS3ConfigRequest):
+    """
+    Create a CVAT project and add tasks from S3.
+    Uses defaults from .env if host, username, password, or s3_bucket are not provided.
+    """
     try:
         client = CVATClient(
             host=request.host,
@@ -34,7 +57,10 @@ def create_cvat_project_and_tasks_s3(request: CVATS3ConfigRequest):
         if not result or not result.get("tasks_created"):
             raise Exception("No tasks created from S3")
 
-        return result
+        return {
+            "message": f"Created {len(result.get('tasks_created'))} tasks in project '{request.project_name}'",
+            "tasks_created": result.get("tasks_created")
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"CVAT S3 integration failed: {str(e)}")
