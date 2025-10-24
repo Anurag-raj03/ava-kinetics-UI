@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
-from typing import List
+from typing import List, Optional
 from processing_pipeline.services.cvat_integration import CVATClient
 
 # Load .env
@@ -26,6 +26,8 @@ class CVATS3ConfigRequest(BaseModel):
     s3_bucket: str = DEFAULT_S3_BUCKET
     project_name: str
     batch_name: str
+    clips: List[str]
+    annotators: Optional[List[str]] = None
 
 class S3ListBatchesRequest(BaseModel):
     s3_bucket: str
@@ -39,7 +41,6 @@ class S3ListClipsRequest(BaseModel):
 # -----------------------
 @router.post("/list-batches")
 def list_batches(request: S3ListBatchesRequest):
-    """List top-level folders (batches) in the S3 bucket."""
     try:
         if not request.s3_bucket:
             raise HTTPException(status_code=400, detail="S3 bucket name is required.")
@@ -62,7 +63,6 @@ def list_batches(request: S3ListBatchesRequest):
 # -----------------------
 @router.post("/list-clips")
 def list_clips(request: S3ListClipsRequest):
-    """List ZIP clips in a batch folder."""
     try:
         if not request.s3_bucket or not request.batch_name:
             raise HTTPException(status_code=400, detail="S3 bucket and batch name required.")
@@ -89,7 +89,6 @@ def list_clips(request: S3ListClipsRequest):
 # -----------------------
 @router.post("/create_project_and_tasks_s3")
 def create_cvat_project_and_tasks_s3(request: CVATS3ConfigRequest):
-    """Create CVAT project and add tasks from S3."""
     try:
         client = CVATClient(
             host=request.host,
@@ -103,7 +102,9 @@ def create_cvat_project_and_tasks_s3(request: CVATS3ConfigRequest):
 
         result = client.create_project_and_add_tasks_from_s3(
             project_name=request.project_name,
-            batch_name=request.batch_name
+            batch_name=request.batch_name,
+            zip_files=request.clips,
+            annotators=request.annotators
         )
 
         if not result or not result.get("tasks_created"):

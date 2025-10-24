@@ -214,8 +214,16 @@ with tab_creator:
         except Exception as e:
             st.error(f"Failed to list clips: {e}")
 
-    # Step 3: Create CVAT Project
-    st.subheader("Step 2: Create CVAT Project & Tasks")
+    # Step 3: Assign Annotators
+    st.subheader("Step 3: Assign Annotators")
+    annotator_input = st.text_area(
+        "Annotators (comma-separated)",
+        value=""
+    )
+    annotators = [a.strip() for a in annotator_input.split(",") if a.strip()]
+
+    # Step 4: Create CVAT Project & Tasks
+    st.subheader("Step 4: Create CVAT Project & Tasks")
     project_name = st.text_input("New CVAT Project Name", f"S3_Project_{int(time.time())}")
 
     if st.button("🚀 Create Project from S3"):
@@ -235,9 +243,10 @@ with tab_creator:
                 "username": cvat_user,
                 "password": cvat_pass,
                 "clips": clip_list,
+                "annotators": annotators  # ✅ Include annotators
             }
             with st.spinner("Creating CVAT project and tasks from S3..."):
-                resp = call_api("POST", "/task-creator/create_project_and_tasks_s3", json_data=payload)
+                resp = call_api("POST", "/create_project_and_tasks_s3", json_data=payload)
                 if resp:
                     st.success("✅ Project and tasks created successfully!")
                     st.json(resp)
