@@ -40,7 +40,7 @@ class DatasetGenerator:
         self.conn = None
 
     def _load_manifest(self, manifest_path: str):
-        """Load manifest from local path or directly from S3."""
+        """Load manifest from local path or directly from S3 and normalize it as dict keyed by keyframe_name."""
         if manifest_path.startswith("s3://"):
             logger.info(f"📦 Loading manifest from S3: {manifest_path}")
             s3 = boto3.client("s3")
@@ -48,11 +48,21 @@ class DatasetGenerator:
             bucket = parsed.netloc
             key = parsed.path.lstrip("/")
             obj = s3.get_object(Bucket=bucket, Key=key)
-            return json.loads(obj["Body"].read().decode("utf-8"))
+            manifest = json.loads(obj["Body"].read().decode("utf-8"))
         else:
             logger.info(f"📁 Loading manifest from local path: {manifest_path}")
             with open(manifest_path, "r") as f:
-                return json.load(f)
+                manifest = json.load(f)
+
+        # Normalize manifest to dict keyed by keyframe_name
+        if isinstance(manifest, list):
+            manifest_dict = {item["keyframe_name"]: item for item in manifest}
+            return manifest_dict
+        elif isinstance(manifest, dict):
+            return manifest
+        else:
+            raise ValueError("Manifest must be a dict or a list of dicts")
+
 
     def connect_db(self):
         try:
