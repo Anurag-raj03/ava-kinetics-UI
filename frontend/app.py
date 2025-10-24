@@ -1,4 +1,4 @@
-# ui.py
+# app.py
 import streamlit as st
 import pandas as pd
 import requests
@@ -113,6 +113,70 @@ def list_s3_batches(bucket_name):
             batches.add(prefix.get("Prefix").rstrip("/"))
     return sorted(list(batches))
 
+def list_s3_clips(bucket_name, batch_name):
+    """List ZIP files under frames/ folder of a batch."""
+    s3 = boto3.client("s3")
+    prefix = f"{batch_name}/frames/"
+    clips = []
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith(".zip"):
+                clips.append(obj["Key"].split("/")[-1])
+    return sorted(clips)
+
+def list_s3_manifests(bucket_name, batch_name):
+    """List manifest JSONs under manifests/ folder of a batch."""
+    s3 = boto3.client("s3")
+    prefix = f"{batch_name}/manifests/"
+    manifests = []
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith(".json"):
+                manifests.append(obj["Key"].split("/")[-1])
+    return sorted(manifests)
+
+# ==========================================================
+# 🧩 TAB 1: QC & DATASET GENERATOR
+# ==========================================================
+with tab_qc:
+    st.header("1️⃣ Quality Control Approval")
+    # ... existing QC tab code ...
+
+    st.markdown("---")
+    st.header("2️⃣ Generate Final Dataset")
+    
+    # S3 Batch selection for manifest
+    s3_bucket_name_qc = st.text_input("S3 Bucket Name for Manifest", value=s3_bucket_name_sidebar)
+    selected_batch_qc = st.text_input("Batch Name", "factory_batch_01")
+    
+    manifests = []
+    if s3_bucket_name_qc and selected_batch_qc:
+        try:
+            manifests = list_s3_manifests(s3_bucket_name_qc, selected_batch_qc)
+        except Exception as e:
+            st.error(f"Failed to list manifests: {e}")
+    
+    manifest_path_str = None
+    if manifests:
+        manifest_choice = st.selectbox("Select Manifest", manifests)
+        manifest_path_str = f"s3://{s3_bucket_name_qc}/{selected_batch_qc}/manifests/{manifest_choice}"
+    
+    default_output_filename = f"project_{st.session_state.get('qc_project_select_id', '0')}_ava_kinetics_dataset.csv"
+    output_filename = st.text_input("Output CSV Filename", default_output_filename)
+
+    if st.button("📊 Generate Dataset") and manifest_path_str:
+        payload = {
+            "db_params": db_params,
+            "project_id": st.session_state.get("qc_project_select_id"),
+            "manifest_path": manifest_path_str,
+            "output_filename": output_filename,
+        }
+        result = call_api("POST", "/qc/generate_dataset", json_data=payload)
+        if result:
+            st.success(f"✅ Dataset generated: `{result['filename']}`")
+
 # ==========================================================
 # 🧩 TAB 2: CVAT TASK CREATOR (S3)
 # ==========================================================
@@ -123,7 +187,10 @@ with tab_creator:
     # Step 1: Select S3 bucket and fetch batch names
     st.subheader("Step 1: Select S3 Batch")
     s3_bucket_name = st.text_input("S3 Bucket Name", value=s3_bucket_name_sidebar)
+
+    # ⚠ Initialize batch_name
     batch_name = None
+
     if s3_bucket_name:
         try:
             batches = list_s3_batches(s3_bucket_name)
@@ -134,11 +201,18 @@ with tab_creator:
         except Exception as e:
             st.error(f"Failed to list S3 batches: {e}")
 
-    # Step 2: Clip selection (optional: auto fetch)
-    clip_names_input = st.text_area(
-        "Clip ZIP File Names (comma-separated)",
-        value=st.session_state.get("s3_clip_names", "")
-    )
+    # Step 2: List Clips
+    clip_names_input = ""
+    if batch_name:
+        try:
+            clips = list_s3_clips(s3_bucket_name, batch_name)
+            if clips:
+                clip_names_input = st.text_area(
+                    "Clip ZIP File Names (comma-separated)",
+                    value=",".join(clips)
+                )
+        except Exception as e:
+            st.error(f"Failed to list clips: {e}")
 
     # Step 3: Create CVAT Project
     st.subheader("Step 2: Create CVAT Project & Tasks")
@@ -160,6 +234,7 @@ with tab_creator:
                 "host": cvat_host,
                 "username": cvat_user,
                 "password": cvat_pass,
+                "clips": clip_list,
             }
             with st.spinner("Creating CVAT project and tasks from S3..."):
                 resp = call_api("POST", "/task-creator/create_project_and_tasks_s3", json_data=payload)
