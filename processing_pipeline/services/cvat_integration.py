@@ -92,6 +92,15 @@ class CVATClient:
                 return False
             time.sleep(3)
 
+    def wait_for_task_frames(self, task_id: int):
+        """Wait for CVAT to finish processing frames before uploading annotations"""
+        while True:
+            task_info = self._make_authenticated_request("GET", f"{self.host}/api/tasks/{task_id}").json()
+            if task_info.get("size", 0) > 0:
+                break
+            logger.info(f"Waiting for task {task_id} to process remote frames...")
+            time.sleep(3)
+
     def import_annotations(self, task_id: int, xml_file: str) -> bool:
         url = f"{self.host}/api/tasks/{task_id}/annotations?action=upload&format=CVAT%201.1"
         with open(xml_file, "rb") as fh:
@@ -100,6 +109,7 @@ class CVATClient:
         if resp.status_code not in (201, 202):
             logger.error(f"Annotation upload failed: {resp.status_code} - {resp.text}")
             return False
+        logger.info(f"✓ Annotations uploaded for task {task_id}")
         return True
 
     def assign_user_to_task(self, task_id: int, username: str) -> bool:
@@ -149,18 +159,14 @@ class CVATClient:
         self.s3_client.download_file(self.s3_bucket, key, local_path)
         return local_path
 
-    # -------------------------
-    # Generate presigned URL for CVAT
-    # -------------------------
     def generate_presigned_url(self, key: str, expiration: int = 3600) -> str:
         if not self.s3_client or not self.s3_bucket:
             raise RuntimeError("S3 client or bucket not configured.")
-        url = self.s3_client.generate_presigned_url(
+        return self.s3_client.generate_presigned_url(
             'get_object',
             Params={'Bucket': self.s3_bucket, 'Key': key},
             ExpiresIn=expiration
         )
-        return url
 
     # -------------------------
     # Task creation from S3
@@ -192,12 +198,13 @@ class CVATClient:
                 logger.error(f"Data upload failed for task {task_id}: {data_resp.text}")
                 continue
 
-            # Download annotation XML locally from S3
+            # Wait for CVAT to finish processing frames
+            self.wait_for_task_frames(task_id)
+
+            # Download annotation XML locally from S3 and upload
             with tempfile.TemporaryDirectory() as tmpdir:
                 xml_s3_key = f"{batch_name}/annotations/{annot_base}_annotations.xml"
                 local_xml = self.download_s3_file(xml_s3_key, tmpdir)
-
-                # Upload annotation to CVAT
                 if not self.import_annotations(task_id, local_xml):
                     logger.error(f"Annotation upload failed for task {task_id}")
                     continue
@@ -216,10 +223,7 @@ class CVATClient:
         if not project_id:
             return None
 
-        if zip_files:
-            results = self.create_tasks_from_selected_s3_files(project_id, batch_name, zip_files, annotators)
-        else:
-            results = []
+        results = self.create_tasks_from_selected_s3_files(project_id, batch_name, zip_files, annotators) if zip_files else []
 
         return {"project_id": project_id, "tasks_created": results}
 

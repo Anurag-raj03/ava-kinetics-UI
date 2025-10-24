@@ -250,6 +250,7 @@ with tab_creator:
                 if resp:
                     st.success("✅ Project and tasks created successfully!")
                     st.json(resp)
+                    time.sleep(0.5)
                     st.session_state["needs_project_refresh"] = True
                     st.session_state["s3_clip_names"] = ""
                     time.sleep(0.1)
