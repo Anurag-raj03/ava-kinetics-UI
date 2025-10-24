@@ -64,12 +64,16 @@ def get_available_projects(params: DBParams = DBParams()):
     """Fetches all projects from the database."""
     try:
         projects = get_projects(params.model_dump())
-        if not projects:
-            raise HTTPException(status_code=503, detail="No projects found or DB connection failed.")
+        if projects is None:
+            logger.warning("No projects found in the database.")
+            return {}  # Return empty dict instead of raising HTTPException
         return projects
     except Exception as e:
         logger.error(f"Failed to fetch projects: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch projects: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch projects. Check DB connection and credentials. Error: {str(e)}"
+        )
 
 @router.post("/pending_tasks/{project_id}")
 def get_tasks_for_project(project_id: int, params: DBParams = DBParams()):
@@ -78,12 +82,15 @@ def get_tasks_for_project(project_id: int, params: DBParams = DBParams()):
         tasks = get_pending_tasks(params.model_dump(), project_id)
         logger.info(f"Returning {len(tasks)} pending tasks for project {project_id}")
         return JSONResponse(
-            content=tasks,
+            content=tasks or [],
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
         )
     except Exception as e:
         logger.error(f"Failed to fetch pending tasks: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch pending tasks: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch pending tasks. Error: {str(e)}"
+        )
 
 @router.post("/approve_all_pending/{project_id}")
 def approve_pending_tasks(project_id: int, params: DBParams = DBParams()):
@@ -91,11 +98,15 @@ def approve_pending_tasks(project_id: int, params: DBParams = DBParams()):
     try:
         count = update_all_pending_to_approved(params.model_dump(), project_id)
         if count == 0:
-            raise HTTPException(status_code=404, detail="No pending tasks found or DB connection failed.")
+            logger.warning(f"No pending tasks found for project {project_id}")
+            return {"approved_count": 0}
         return {"approved_count": count}
     except Exception as e:
         logger.error(f"Failed to approve tasks: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to approve tasks: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to approve tasks. Error: {str(e)}"
+        )
 
 @router.post("/generate_dataset")
 def generate_dataset_endpoint(request: GenerateRequest):
@@ -120,4 +131,7 @@ def generate_dataset_endpoint(request: GenerateRequest):
 
     except Exception as e:
         logger.error(f"Dataset generation failed: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Dataset generation failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Dataset generation failed. Error: {str(e)}"
+        )
