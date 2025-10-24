@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import tempfile
 import time
-from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -23,6 +22,9 @@ class CVATClient:
         self.s3_bucket = s3_bucket
         self.s3_client = boto3.client("s3") if s3_bucket else None
 
+    # -------------------------
+    # CVAT Authentication
+    # -------------------------
     def login(self) -> bool:
         try:
             url = f"{self.host}/api/auth/login"
@@ -42,11 +44,13 @@ class CVATClient:
         kwargs.setdefault("timeout", 300)
         return self.session.request(method.upper(), url, **kwargs)
 
+    # -------------------------
+    # Project & Task Management
+    # -------------------------
     def create_project(self, name: str, labels: List[Dict[str, Any]], org_slug: str = None) -> Optional[int]:
         payload = {"name": name, "labels": labels}
         if org_slug:
             payload['org'] = org_slug
-
         resp = self._make_authenticated_request('POST', f"{self.host}/api/projects", json=payload)
         if resp.status_code == 201:
             project_id = resp.json()["id"]
@@ -65,6 +69,9 @@ class CVATClient:
         logger.error(f"Failed to create task: {resp.status_code} - {resp.text}")
         return None
 
+    # -------------------------
+    # Upload Data / Annotations
+    # -------------------------
     def upload_data_to_task(self, task_id: int, zip_file_path: str) -> bool:
         with open(zip_file_path, 'rb') as fh:
             files = {'client_files[0]': (os.path.basename(zip_file_path), fh, 'application/zip')}
@@ -111,34 +118,48 @@ class CVATClient:
         logger.info(f"✓ Assigned task {task_id} to '{username}'")
         return True
 
-    def list_s3_files(self, prefix: str) -> List[str]:
-        """List all files in S3 under a specific prefix."""
+    # -------------------------
+    # S3 Methods
+    # -------------------------
+    def list_batches_in_s3(self) -> List[str]:
+        """List top-level folders (batches) in S3 bucket."""
         if not self.s3_client or not self.s3_bucket:
             raise RuntimeError("S3 client or bucket not configured.")
+        paginator = self.s3_client.get_paginator("list_objects_v2")
+        batches = set()
+        for page in paginator.paginate(Bucket=self.s3_bucket, Delimiter="/"):
+            for prefix in page.get("CommonPrefixes", []):
+                batches.add(prefix.get("Prefix").rstrip("/"))
+        return sorted(list(batches))
+
+    def list_zip_files_in_s3(self, batch_name: str) -> List[str]:
+        """List ZIP files inside a batch folder (frames/<batch_name>/)."""
+        if not self.s3_client or not self.s3_bucket:
+            raise RuntimeError("S3 client or bucket not configured.")
+        prefix = f"{batch_name}/frames/"
         paginator = self.s3_client.get_paginator("list_objects_v2")
         files = []
         for page in paginator.paginate(Bucket=self.s3_bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
-                files.append(obj["Key"])
-        return files
+                key = obj["Key"]
+                if key.endswith(".zip"):
+                    files.append(os.path.basename(key))
+        return sorted(files)
 
     def download_s3_file(self, key: str, local_dir: str) -> str:
-        """Download file from S3 to a temporary local directory."""
+        """Download file from S3 to a local directory."""
         filename = os.path.basename(key)
         local_path = os.path.join(local_dir, filename)
         self.s3_client.download_file(self.s3_bucket, key, local_path)
         return local_path
 
-    def create_tasks_from_s3(
-        self,
-        project_id: int,
-        batch_name: str
-    ) -> List[Dict]:
-        """Creates CVAT tasks from keyframe and annotation files stored in S3."""
+    # -------------------------
+    # Task creation from S3
+    # -------------------------
+    def create_tasks_from_s3(self, project_id: int, batch_name: str) -> List[Dict]:
         results = []
         temp_dir = tempfile.mkdtemp()
 
-        # Find all ZIP keyframes
         zip_keys = self.list_s3_files(f"frames/{batch_name}/")
         zip_keys = [k for k in zip_keys if k.endswith(".zip")]
         if not zip_keys:
@@ -150,7 +171,6 @@ class CVATClient:
             annotator = base_name.split("_")[-1]
             xml_key = f"annotations/{batch_name}/{base_name}_annotations.xml"
 
-            # Download both files
             try:
                 zip_path = self.download_s3_file(zip_key, temp_dir)
                 xml_path = self.download_s3_file(xml_key, temp_dir)
@@ -158,7 +178,6 @@ class CVATClient:
                 logger.error(f"Download failed for {zip_key}: {e}")
                 continue
 
-            # Create CVAT task
             task_name = base_name
             task_id = self.create_task(task_name, project_id)
             if not task_id:
@@ -175,11 +194,7 @@ class CVATClient:
 
         return results
 
-    def create_project_and_add_tasks_from_s3(
-        self,
-        project_name: str,
-        batch_name: str
-    ) -> Optional[Dict]:
+    def create_project_and_add_tasks_from_s3(self, project_name: str, batch_name: str) -> Optional[Dict]:
         logger.info(f"Creating new CVAT project '{project_name}' (S3 mode)...")
         project_id = self.create_project(project_name, get_default_labels())
         if not project_id:
@@ -189,21 +204,36 @@ class CVATClient:
         return {"project_id": project_id, "tasks_created": results}
 
 
+# -------------------------
+# Default Labels
+# -------------------------
 def get_default_labels() -> List[Dict[str, Any]]:
-    """Same label schema as before."""
     return [
         {
             "name": "person",
             "color": "#ff0000",
             "attributes": [
-                {"name": "ppe_helmet", "mutable": True, "input_type": "select", "default_value": "helmet_worn", "values": ["helmet_worn", "no_helmet", "helmet_incorrect"]},
-                {"name": "ppe_vest", "mutable": True, "input_type": "select", "default_value": "vest_worn", "values": ["vest_worn", "no_vest"]},
-                {"name": "ppe_gloves", "mutable": True, "input_type": "select", "default_value": "gloves_worn", "values": ["gloves_worn", "no_gloves"]},
-                {"name": "ppe_boots", "mutable": True, "input_type": "select", "default_value": "safety_boots_worn", "values": ["safety_boots_worn", "no_safety_boots"]},
-                {"name": "work_activity", "mutable": True, "input_type": "select", "default_value": "idle", "values": ["idle", "welding", "cutting", "climbing", "lifting_materials", "machine_operation", "supervising", "walking"]},
-                {"name": "posture_safety", "mutable": True, "input_type": "select", "default_value": "upright_normal", "values": ["upright_normal", "bending", "overreaching", "unsafe_posture"]},
-                {"name": "hazard_proximity", "mutable": True, "input_type": "select", "default_value": "safe_zone", "values": ["safe_zone", "near_hot_surface", "near_heavy_load", "near_moving_machine", "near_open_edge"]},
-                {"name": "team_interaction", "mutable": True, "input_type": "select", "default_value": "working_alone", "values": ["working_alone", "pair_work", "small_team", "large_group", "supervisor_present"]},
+                {"name": "ppe_helmet", "mutable": True, "input_type": "select",
+                 "default_value": "helmet_worn", "values": ["helmet_worn", "no_helmet", "helmet_incorrect"]},
+                {"name": "ppe_vest", "mutable": True, "input_type": "select",
+                 "default_value": "vest_worn", "values": ["vest_worn", "no_vest"]},
+                {"name": "ppe_gloves", "mutable": True, "input_type": "select",
+                 "default_value": "gloves_worn", "values": ["gloves_worn", "no_gloves"]},
+                {"name": "ppe_boots", "mutable": True, "input_type": "select",
+                 "default_value": "safety_boots_worn", "values": ["safety_boots_worn", "no_safety_boots"]},
+                {"name": "work_activity", "mutable": True, "input_type": "select",
+                 "default_value": "idle",
+                 "values": ["idle", "welding", "cutting", "climbing", "lifting_materials",
+                            "machine_operation", "supervising", "walking"]},
+                {"name": "posture_safety", "mutable": True, "input_type": "select",
+                 "default_value": "upright_normal",
+                 "values": ["upright_normal", "bending", "overreaching", "unsafe_posture"]},
+                {"name": "hazard_proximity", "mutable": True, "input_type": "select",
+                 "default_value": "safe_zone",
+                 "values": ["safe_zone", "near_hot_surface", "near_heavy_load", "near_moving_machine", "near_open_edge"]},
+                {"name": "team_interaction", "mutable": True, "input_type": "select",
+                 "default_value": "working_alone",
+                 "values": ["working_alone", "pair_work", "small_team", "large_group", "supervisor_present"]},
             ]
         }
     ]

@@ -1,14 +1,12 @@
 # services/cvat_s3_router.py
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Dict
 from dotenv import load_dotenv
 import os
+from typing import List
 from processing_pipeline.services.cvat_integration import CVATClient
 
-# ==========================================================
-# Load .env variables
-# ==========================================================
+# Load .env
 load_dotenv()
 
 DEFAULT_CVAT_HOST = os.getenv("CVAT_HOST", "http://localhost:8080")
@@ -18,9 +16,9 @@ DEFAULT_S3_BUCKET = os.getenv("AWS_STORAGE_BUCKET_NAME", "cvat-data-uploader")
 
 router = APIRouter()
 
-# ==========================================================
-# Request Schema
-# ==========================================================
+# -----------------------
+# Request Schemas
+# -----------------------
 class CVATS3ConfigRequest(BaseModel):
     host: str = DEFAULT_CVAT_HOST
     username: str = DEFAULT_CVAT_USERNAME
@@ -29,15 +27,69 @@ class CVATS3ConfigRequest(BaseModel):
     project_name: str
     batch_name: str
 
-# ==========================================================
-# Endpoint
-# ==========================================================
+class S3ListBatchesRequest(BaseModel):
+    s3_bucket: str
+
+class S3ListClipsRequest(BaseModel):
+    s3_bucket: str
+    batch_name: str
+
+# -----------------------
+# Endpoint: List batches
+# -----------------------
+@router.post("/list-batches")
+def list_batches(request: S3ListBatchesRequest):
+    """List top-level folders (batches) in the S3 bucket."""
+    try:
+        if not request.s3_bucket:
+            raise HTTPException(status_code=400, detail="S3 bucket name is required.")
+
+        client = CVATClient(
+            host=DEFAULT_CVAT_HOST,
+            username=DEFAULT_CVAT_USERNAME,
+            password=DEFAULT_CVAT_PASSWORD,
+            s3_bucket=request.s3_bucket
+        )
+
+        batches = client.list_batches_in_s3()
+        return {"message": f"Found {len(batches)} batches.", "batches": batches}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list batches: {e}")
+
+# -----------------------
+# Endpoint: List clips
+# -----------------------
+@router.post("/list-clips")
+def list_clips(request: S3ListClipsRequest):
+    """List ZIP clips in a batch folder."""
+    try:
+        if not request.s3_bucket or not request.batch_name:
+            raise HTTPException(status_code=400, detail="S3 bucket and batch name required.")
+
+        client = CVATClient(
+            host=DEFAULT_CVAT_HOST,
+            username=DEFAULT_CVAT_USERNAME,
+            password=DEFAULT_CVAT_PASSWORD,
+            s3_bucket=request.s3_bucket
+        )
+
+        clip_names = client.list_zip_files_in_s3(batch_name=request.batch_name)
+
+        return {
+            "message": f"Found {len(clip_names)} clips in batch '{request.batch_name}'.",
+            "clip_names": clip_names
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list clips: {e}")
+
+# -----------------------
+# Endpoint: Create project & tasks
+# -----------------------
 @router.post("/create_project_and_tasks_s3")
 def create_cvat_project_and_tasks_s3(request: CVATS3ConfigRequest):
-    """
-    Create a CVAT project and add tasks from S3.
-    Uses defaults from .env if host, username, password, or s3_bucket are not provided.
-    """
+    """Create CVAT project and add tasks from S3."""
     try:
         client = CVATClient(
             host=request.host,
