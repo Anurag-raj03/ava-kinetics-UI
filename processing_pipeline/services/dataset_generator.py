@@ -39,29 +39,40 @@ class DatasetGenerator:
         self.action_id_map = calculate_action_mapping()
         self.conn = None
 
-    def _load_manifest(self, manifest_path: str):
-        """Load manifest from local path or directly from S3 and normalize it as dict keyed by keyframe_name."""
-        if manifest_path.startswith("s3://"):
-            logger.info(f"📦 Loading manifest from S3: {manifest_path}")
-            s3 = boto3.client("s3")
-            parsed = urlparse(manifest_path)
-            bucket = parsed.netloc
-            key = parsed.path.lstrip("/")
-            obj = s3.get_object(Bucket=bucket, Key=key)
-            manifest = json.loads(obj["Body"].read().decode("utf-8"))
-        else:
-            logger.info(f"📁 Loading manifest from local path: {manifest_path}")
-            with open(manifest_path, "r") as f:
-                manifest = json.load(f)
+    def _load_manifest(self) -> Dict[str, Any]:
+        """
+        Load the manifest JSON file from S3.
+        Supports both dict-style (key -> metadata) and list-style manifests.
+        """
+        try:
+            obj = self.s3_client.get_object(Bucket=self.bucket, Key=self.manifest_key)
+            manifest_data = json.loads(obj["Body"].read().decode("utf-8"))
 
-        # Normalize manifest to dict keyed by keyframe_name
-        if isinstance(manifest, list):
-            manifest_dict = {item["keyframe_name"]: item for item in manifest}
-            return manifest_dict
-        elif isinstance(manifest, dict):
-            return manifest
-        else:
-            raise ValueError("Manifest must be a dict or a list of dicts")
+            # Case 1: Dict format like {"1_clip_001_frame_001.jpg": {...}, ...}
+            if isinstance(manifest_data, dict):
+                return manifest_data
+
+            # Case 2: List format like [{"keyframe_name": ..., ...}, ...]
+            elif isinstance(manifest_data, list):
+                result = {}
+                for entry in manifest_data:
+                    key = (
+                        entry.get("keyframe_name")
+                        or entry.get("frame_name")
+                        or entry.get("image_name")
+                        or entry.get("file_name")
+                    )
+                    if key:
+                        result[key] = entry
+                return result
+
+            else:
+                logger.warning(f"⚠️ Unexpected manifest format: {type(manifest_data)}")
+                return {}
+
+        except Exception as e:
+            logger.error(f"❌ Error loading manifest from S3: {e}")
+            return {}
 
 
     def connect_db(self):
