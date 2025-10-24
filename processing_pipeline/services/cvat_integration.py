@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import tempfile
 import time
+import shutil
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -133,7 +134,7 @@ class CVATClient:
         return sorted(list(batches))
 
     def list_zip_files_in_s3(self, batch_name: str) -> List[str]:
-        """List ZIP files inside a batch folder (frames/<batch_name>/)."""
+        """List ZIP files inside a batch folder (e.g., <batch_name>/frames/)."""
         if not self.s3_client or not self.s3_bucket:
             raise RuntimeError("S3 client or bucket not configured.")
         prefix = f"{batch_name}/frames/"
@@ -153,6 +154,17 @@ class CVATClient:
         self.s3_client.download_file(self.s3_bucket, key, local_path)
         return local_path
 
+    def list_s3_files(self, prefix: str) -> List[str]:
+        """Helper to list all files recursively under a given prefix."""
+        if not self.s3_client or not self.s3_bucket:
+            raise RuntimeError("S3 client or bucket not configured.")
+        paginator = self.s3_client.get_paginator("list_objects_v2")
+        files = []
+        for page in paginator.paginate(Bucket=self.s3_bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                files.append(obj["Key"])
+        return files
+
     # -------------------------
     # Task creation from S3
     # -------------------------
@@ -160,16 +172,16 @@ class CVATClient:
         results = []
         temp_dir = tempfile.mkdtemp()
 
-        zip_keys = self.list_s3_files(f"frames/{batch_name}/")
+        zip_keys = self.list_s3_files(f"{batch_name}/frames/")
         zip_keys = [k for k in zip_keys if k.endswith(".zip")]
         if not zip_keys:
-            logger.error(f"No keyframe ZIPs found in S3 under frames/{batch_name}/")
+            logger.error(f"No keyframe ZIPs found in S3 under {batch_name}/frames/")
             return results
 
         for zip_key in zip_keys:
             base_name = Path(zip_key).stem
-            annotator = base_name.split("_")[-1]
-            xml_key = f"annotations/{batch_name}/{base_name}_annotations.xml"
+            annotator = base_name.split("_")[-2] if "annotator" in base_name else "default"
+            xml_key = f"{batch_name}/annotations/{base_name}_annotations.xml"
 
             try:
                 zip_path = self.download_s3_file(zip_key, temp_dir)
@@ -192,6 +204,7 @@ class CVATClient:
             results.append({'task_id': task_id, 'task_name': task_name, 'annotator': annotator})
             logger.info(f"✓ Completed CVAT task for {annotator}")
 
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return results
 
     def create_project_and_add_tasks_from_s3(self, project_name: str, batch_name: str) -> Optional[Dict]:
