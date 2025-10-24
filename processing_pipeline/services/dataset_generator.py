@@ -39,13 +39,13 @@ class DatasetGenerator:
         self.action_id_map = calculate_action_mapping()
         self.conn = None
 
-    def _load_manifest(self) -> Dict[str, Any]:
+    def _load_manifest(self, manifest_key: str) -> Dict[str, Any]:
         """
         Load the manifest JSON file from S3.
         Supports both dict-style (key -> metadata) and list-style manifests.
         """
         try:
-            obj = self.s3_client.get_object(Bucket=self.bucket, Key=self.manifest_key)
+            obj = self.s3_client.get_object(Bucket=self.bucket, Key=manifest_key)
             manifest_data = json.loads(obj["Body"].read().decode("utf-8"))
 
             # Case 1: Dict format like {"1_clip_001_frame_001.jpg": {...}, ...}
@@ -73,6 +73,7 @@ class DatasetGenerator:
         except Exception as e:
             logger.error(f"❌ Error loading manifest from S3: {e}")
             return {}
+
 
 
     def connect_db(self):
