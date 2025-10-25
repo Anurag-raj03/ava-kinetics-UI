@@ -278,8 +278,6 @@
 #                     rerun()
 
 
-
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -307,7 +305,7 @@ DEFAULT_CVAT_USER = os.getenv("CVAT_USERNAME") or "Strawhat03"
 DEFAULT_CVAT_PASS = os.getenv("CVAT_PASSWORD") or "Test@123"
 DEFAULT_S3_BUCKET = os.getenv("AWS_STORAGE_BUCKET_NAME") or "ava-kine-data"
 
-def rerun(force: bool = True):
+def rerun():
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
@@ -342,6 +340,7 @@ def load_pending_tasks(db_params, project_id):
     tasks = call_api("POST", f"/qc/pending_tasks/{project_id}", json_data=db_params)
     st.session_state["task_data"] = tasks or []
 
+@st.cache_data(show_spinner="Listing S3 batches...")
 def list_s3_batches(bucket_name):
     s3 = boto3.client("s3")
     paginator = s3.get_paginator("list_objects_v2")
@@ -351,6 +350,7 @@ def list_s3_batches(bucket_name):
             batches.add(prefix.get("Prefix").rstrip("/"))
     return sorted(list(batches))
 
+@st.cache_data(show_spinner="Listing S3 clips...")
 def list_s3_clips(bucket_name, batch_name):
     s3 = boto3.client("s3")
     prefix = f"{batch_name}/frames/"
@@ -362,6 +362,7 @@ def list_s3_clips(bucket_name, batch_name):
                 clips.append(obj["Key"].split("/")[-1])
     return sorted(clips)
 
+@st.cache_data(show_spinner="Listing S3 manifests...")
 def list_s3_manifests(bucket_name, batch_name):
     s3 = boto3.client("s3")
     prefix = f"{batch_name}/manifests/"
@@ -408,20 +409,44 @@ with tab_qc:
     projects = fetch_projects_api(db_params) or {}
     project_options = [f"{pid}: {pname}" for pid, pname in projects.items()]
 
+    if st.button("🔄 Force Refresh Project List", key="force_refresh_projects"):
+        fetch_projects_api.clear()
+        st.session_state["needs_project_refresh"] = True
+        st.session_state["task_data"] = []
+        rerun()
+
+    default_index = 0
+    current_id = st.session_state.get("qc_project_select_id")
+    if current_id and project_options:
+        try:
+            default_index = next(i for i, opt in enumerate(project_options) if opt.startswith(f"{current_id}:"))
+        except StopIteration:
+            pass
+
     if not project_options:
         st.warning("No projects found in the database. Check your DB connection or create a project.")
         selected_project_str = None
     else:
-        selected_project_str = st.selectbox("Select Project for QC", project_options)
+        selected_project_str = st.selectbox(
+            "Select Project for QC", 
+            project_options, 
+            index=default_index, 
+            key="qc_project_selector"
+        )
 
     if selected_project_str:
         project_id = int(selected_project_str.split(":")[0])
-        if project_id != st.session_state.get("qc_project_select_id"):
+        if project_id != st.session_state.get("qc_project_select_id") or not st.session_state.get("task_data"):
             st.session_state["qc_project_select_id"] = project_id
             load_pending_tasks(db_params, project_id)
 
         tasks = st.session_state.get("task_data", [])
         st.subheader(f"Pending Tasks ({len(tasks)})")
+
+        if st.button("🔄 Refresh Task Status", key="refresh_tasks_button"):
+            load_pending_tasks(db_params, project_id)
+            rerun()
+
         if tasks:
             st.dataframe(pd.DataFrame(tasks))
             if st.button("✅ Approve All Pending Tasks"):
@@ -511,7 +536,9 @@ with tab_creator:
                 if resp:
                     st.success("✅ Project and tasks created successfully!")
                     st.json(resp)
-                    time.sleep(2)
+                    new_project_id = resp.get("project_id")
+                    if new_project_id:
+                        st.session_state["qc_project_select_id"] = new_project_id
                     st.session_state["needs_project_refresh"] = True
-                    time.sleep(0.5)
+                    time.sleep(1)
                     rerun()
