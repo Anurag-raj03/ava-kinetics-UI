@@ -280,7 +280,6 @@
 
 
 
-# 🚀 AVA-Kinetics Pipeline UI - Full Updated Version
 import streamlit as st
 import pandas as pd
 import requests
@@ -291,9 +290,6 @@ from dotenv import load_dotenv
 import boto3
 import io
 
-# ==========================================================
-# 🔧 Load Environment Variables
-# ==========================================================
 load_dotenv()
 
 BACKEND_URL = os.getenv("FRONTEND_BACKEND_URL") or "http://fastapi:8000/api/v1/cvat"
@@ -311,13 +307,7 @@ DEFAULT_CVAT_USER = os.getenv("CVAT_USERNAME") or "Strawhat03"
 DEFAULT_CVAT_PASS = os.getenv("CVAT_PASSWORD") or "Test@123"
 DEFAULT_S3_BUCKET = os.getenv("AWS_STORAGE_BUCKET_NAME") or "ava-kine-data"
 
-# ==========================================================
-# ♻️ Helper Functions
-# ==========================================================
 def rerun(force: bool = True):
-    """Force a Streamlit rerun and clear cached data if needed."""
-    if force:
-        st.cache_data.clear()
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
@@ -335,7 +325,13 @@ def call_api(method, endpoint, json_data=None, expect_file=False):
         except requests.exceptions.JSONDecodeError:
             return {"message": "Success", "content": response.text}
     except requests.exceptions.RequestException as e:
-        st.error(f"Connection/API Error: {e}")
+        detail = str(e)
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                detail = e.response.json().get("detail", e.response.text)
+            except:
+                detail = e.response.text
+        st.error(f"Connection/API Error: {detail}")
         return None
 
 @st.cache_data(show_spinner="Fetching projects...")
@@ -377,18 +373,12 @@ def list_s3_manifests(bucket_name, batch_name):
                 manifests.append(obj["Key"].split("/")[-1])
     return sorted(manifests)
 
-# ==========================================================
-# 🖥️ Streamlit UI Setup
-# ==========================================================
 st.set_page_config(page_title="AVA-Kinetics Pipeline UI", layout="wide")
 st.title("🚀 Integrated AVA-Kinetics Pipeline UI")
 st.markdown("---")
 
 tab_qc, tab_creator = st.tabs(["✅ QC & Dataset Generator", "🚀 CVAT Task Creator (S3)"])
 
-# ==========================================================
-# Sidebar
-# ==========================================================
 st.sidebar.header("⚙️ DB Configuration (QC/Generator)")
 db_params = {
     "dbname": st.sidebar.text_input("DB Name", DEFAULT_DB_PARAMS["dbname"]),
@@ -405,56 +395,44 @@ cvat_user = st.sidebar.text_input("CVAT Username", DEFAULT_CVAT_USER)
 cvat_pass = st.sidebar.text_input("CVAT Password", DEFAULT_CVAT_PASS, type="password")
 s3_bucket_name_sidebar = st.sidebar.text_input("S3 Bucket Name", DEFAULT_S3_BUCKET)
 
-# ==========================================================
-# 🧾 QC & Dataset Generator Tab
-# ==========================================================
 with tab_qc:
     st.header("1️⃣ Quality Control Approval")
-    
     st.session_state.setdefault("needs_project_refresh", False)
     st.session_state.setdefault("task_data", [])
     st.session_state.setdefault("qc_project_select_id", None)
 
-    # Refresh projects if flagged
     if st.session_state["needs_project_refresh"]:
         fetch_projects_api.clear()
         st.session_state["needs_project_refresh"] = False
 
     projects = fetch_projects_api(db_params) or {}
     project_options = [f"{pid}: {pname}" for pid, pname in projects.items()]
-    selected_project_str = st.selectbox("Select Project for QC", project_options)
+
+    if not project_options:
+        st.warning("No projects found in the database. Check your DB connection or create a project.")
+        selected_project_str = None
+    else:
+        selected_project_str = st.selectbox("Select Project for QC", project_options)
 
     if selected_project_str:
         project_id = int(selected_project_str.split(":")[0])
-        
-        # Reload tasks if project changed
         if project_id != st.session_state.get("qc_project_select_id"):
             st.session_state["qc_project_select_id"] = project_id
             load_pending_tasks(db_params, project_id)
 
         tasks = st.session_state.get("task_data", [])
         st.subheader(f"Pending Tasks ({len(tasks)})")
-
-        # ✅ Approve all pending tasks & 🔄 Refresh buttons
-        col1, col2 = st.columns([1, 1])
-        with col1:
+        if tasks:
+            st.dataframe(pd.DataFrame(tasks))
             if st.button("✅ Approve All Pending Tasks"):
                 resp = call_api("POST", f"/qc/approve_all_pending/{project_id}", json_data=db_params)
                 if resp:
                     st.success(f"Approved {resp['approved_count']} tasks.")
                     load_pending_tasks(db_params, project_id)
-
-        with col2:
-            if st.button("🔄 Refresh Pending Tasks"):
-                load_pending_tasks(db_params, project_id)
-                st.success("Tasks refreshed!")
-
-        if tasks:
-            st.dataframe(pd.DataFrame(tasks))
+                    rerun()
         else:
             st.info("No pending tasks found.")
 
-    # Dataset Generation
     st.markdown("---")
     st.header("2️⃣ Generate Final Dataset")
     s3_bucket_name_qc = st.text_input("S3 Bucket Name for Manifest", value=s3_bucket_name_sidebar, key="qc_bucket")
@@ -481,22 +459,28 @@ with tab_qc:
                 "manifest_path": manifest_path_str,
                 "output_filename": output_filename,
             }
-            response = call_api("POST", "/qc/generate_dataset", json_data=payload, expect_file=True)
-            if response:
-                csv_bytes = io.BytesIO(response.content)
-                csv_bytes.seek(0)
-                st.success(f"✅ Dataset generated: `{output_filename}`")
-                st.download_button("⬇️ Download Dataset CSV", data=csv_bytes, file_name=output_filename, mime="text/csv")
+            with st.spinner("Generating dataset..."):
+                response = call_api("POST", "/qc/generate_dataset", json_data=payload, expect_file=True)
+                if response:
+                    try:
+                        error_json = response.json()
+                        st.error(f"❌ Download failed. Received JSON error: {error_json.get('detail', 'Unknown error')}")
+                        return
+                    except json.JSONDecodeError:
+                        csv_bytes = io.BytesIO(response.content)
+                        csv_bytes.seek(0)
+                        st.success(f"✅ Dataset generated: `{output_filename}`")
+                        st.download_button("⬇️ Download Dataset CSV", data=csv_bytes, file_name=output_filename, mime="text/csv")
 
-# ==========================================================
-# 🧱 CVAT Task Creator Tab
-# ==========================================================
 with tab_creator:
     st.header("🧱 CVAT Task Creator (S3 Direct)")
     st.session_state.setdefault("s3_clip_names", "")
 
-    s3_bucket_name = st.text_input("S3 Bucket Name", value=s3_bucket_name_sidebar)
-    batch_name = st.selectbox("Select Batch", list_s3_batches(s3_bucket_name)) if s3_bucket_name else None
+    s3_bucket_name = st.text_input("S3 Bucket Name", value=s3_bucket_name_sidebar, key="creator_bucket_input")
+    batches = list_s3_batches(s3_bucket_name) if s3_bucket_name else []
+    batch_name = st.selectbox("Select Batch", batches) if batches else None
+    if not batches and s3_bucket_name:
+        st.warning("No batches (subfolders) found in the S3 bucket.")
 
     clip_names_input = ""
     if batch_name:
@@ -523,11 +507,12 @@ with tab_creator:
                 "clips": clip_list,
                 "annotators": annotators
             }
-            resp = call_api("POST", "/create_project_and_tasks_s3", json_data=payload)
-            if resp:
-                st.success("✅ Project and tasks created successfully!")
-                st.json(resp)
-                time.sleep(2)
-                # Flag QC tab to refresh projects/tasks
-                st.session_state["needs_project_refresh"] = True
-                rerun()
+            with st.spinner("Creating CVAT project and tasks..."):
+                resp = call_api("POST", "/create_project_and_tasks_s3", json_data=payload)
+                if resp:
+                    st.success("✅ Project and tasks created successfully!")
+                    st.json(resp)
+                    time.sleep(2)
+                    st.session_state["needs_project_refresh"] = True
+                    time.sleep(0.5)
+                    rerun()
