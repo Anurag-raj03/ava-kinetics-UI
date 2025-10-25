@@ -10,7 +10,6 @@ import os
 from dotenv import load_dotenv
 import boto3
 from io import BytesIO
-from urllib.parse import quote
 
 # ==========================================================
 # 🔧 LOAD ENV VARIABLES
@@ -193,6 +192,7 @@ with tab_qc:
     output_filename = st.text_input("Output CSV Filename", default_output_filename)
 
     
+    import io
 
     if st.button("📊 Generate Dataset"):
         if not st.session_state.get("qc_project_select_id"):
@@ -207,20 +207,23 @@ with tab_qc:
                 "output_filename": output_filename,
             }
             with st.spinner("Generating dataset..."):
-                # Build the download URL with query params
-                from urllib.parse import urlencode
+                try:
+                    response = requests.post(f"{BACKEND_URL}/qc/generate_dataset", json=payload)
+                    response.raise_for_status()
+                    
+                    # Wrap the CSV content in BytesIO for download
+                    csv_bytes = io.BytesIO(response.content)
+                    
+                    st.success(f"✅ Dataset generated: `{output_filename}`")
+                    st.download_button(
+                        label="⬇️ Download Dataset CSV",
+                        data=csv_bytes,
+                        file_name=output_filename,
+                        mime="text/csv"
+                    )
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Failed to generate dataset: {e}")
 
-                params = urlencode({
-                    "db_params": json.dumps(payload["db_params"]),
-                    "project_id": payload["project_id"],
-                    "manifest_path": payload["manifest_path"],
-                    "output_filename": payload["output_filename"]
-                })
-
-                download_url = f"{BACKEND_URL}/qc/generate_dataset?{params}"
-
-                st.success(f"✅ Dataset ready: `{output_filename}`")
-                st.markdown(f"[⬇️ Download CSV]({download_url})")
 
 
 # ==========================================================
