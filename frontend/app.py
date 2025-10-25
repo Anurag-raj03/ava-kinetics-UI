@@ -501,6 +501,11 @@ with tab_qc:
     default_output_filename = f"project_{st.session_state.get('qc_project_select_id', '0')}_ava_kinetics_dataset.csv"
     output_filename = st.text_input("Output CSV Filename", default_output_filename)
 
+
+
+    # -------------------------------
+    # 📊 Generate Final Dataset
+    # -------------------------------
     if st.button("📊 Generate Dataset"):
         if not st.session_state.get("qc_project_select_id"):
             st.error("❌ Select a project first.")
@@ -513,15 +518,25 @@ with tab_qc:
                 "manifest_path": manifest_path_str,
                 "output_filename": output_filename,
             }
+
             with st.spinner("Generating dataset..."):
                 try:
+                    # 1️⃣ Trigger dataset generation
                     response = requests.post(f"{BACKEND_URL}/qc/generate_dataset", json=payload)
                     response.raise_for_status()
+                    st.success(f"✅ Dataset generation triggered: `{output_filename}`")
 
-                    # Wrap CSV content in BytesIO for download
-                    csv_bytes = BytesIO(response.content)
+                    # 2️⃣ Download CSV from S3
+                    s3 = boto3.client("s3")
+                    csv_bytes = io.BytesIO()
+                    
+                    # Make sure your backend saved the CSV to S3 in this path
+                    s3_key = f"{output_filename}"  # or folder path if backend saves like "datasets/project_10_ava_kinetics_dataset.csv"
+                    
+                    s3.download_fileobj(Bucket=s3_bucket_name_qc, Key=s3_key, Fileobj=csv_bytes)
+                    csv_bytes.seek(0)
 
-                    st.success(f"✅ Dataset generated: `{output_filename}`")
+                    # 3️⃣ Show download button
                     st.download_button(
                         label="⬇️ Download Dataset CSV",
                         data=csv_bytes,
@@ -530,6 +545,11 @@ with tab_qc:
                     )
                 except requests.exceptions.RequestException as e:
                     st.error(f"Failed to generate dataset: {e}")
+                except boto3.exceptions.S3UploadFailedError as e:
+                    st.error(f"Failed to download CSV from S3: {e}")
+                except Exception as e:
+                    st.error(f"Unexpected error: {e}")
+
 
 # ==========================================================
 # 🧩 TAB 2: CVAT TASK CREATOR (S3)
