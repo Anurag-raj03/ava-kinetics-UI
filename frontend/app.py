@@ -465,7 +465,6 @@ with tab_qc:
                     try:
                         error_json = response.json()
                         st.error(f"❌ Download failed. Received JSON error: {error_json.get('detail', 'Unknown error')}")
-                        return
                     except json.JSONDecodeError:
                         csv_bytes = io.BytesIO(response.content)
                         csv_bytes.seek(0)
