@@ -503,9 +503,8 @@ with tab_qc:
 
 
 
-    # -------------------------------
-    # 📊 Generate Final Dataset
-    # -------------------------------
+    import io
+
     if st.button("📊 Generate Dataset"):
         if not st.session_state.get("qc_project_select_id"):
             st.error("❌ Select a project first.")
@@ -518,37 +517,31 @@ with tab_qc:
                 "manifest_path": manifest_path_str,
                 "output_filename": output_filename,
             }
-
             with st.spinner("Generating dataset..."):
                 try:
-                    # 1️⃣ Trigger dataset generation
-                    response = requests.post(f"{BACKEND_URL}/qc/generate_dataset", json=payload)
+                    # Request CSV directly from backend
+                    response = requests.post(
+                        f"{BACKEND_URL}/qc/generate_dataset",
+                        json=payload,
+                        stream=True  # important for large files
+                    )
                     response.raise_for_status()
-                    st.success(f"✅ Dataset generation triggered: `{output_filename}`")
 
-                    # 2️⃣ Download CSV from S3
-                    s3 = boto3.client("s3")
-                    csv_bytes = io.BytesIO()
-                    
-                    # Make sure your backend saved the CSV to S3 in this path
-                    s3_key = f"{output_filename}"  # or folder path if backend saves like "datasets/project_10_ava_kinetics_dataset.csv"
-                    
-                    s3.download_fileobj(Bucket=s3_bucket_name_qc, Key=s3_key, Fileobj=csv_bytes)
+                    # Wrap CSV in BytesIO for download
+                    csv_bytes = io.BytesIO(response.content)
                     csv_bytes.seek(0)
 
-                    # 3️⃣ Show download button
+                    st.success(f"✅ Dataset generated: `{output_filename}`")
                     st.download_button(
                         label="⬇️ Download Dataset CSV",
                         data=csv_bytes,
                         file_name=output_filename,
                         mime="text/csv"
                     )
+
                 except requests.exceptions.RequestException as e:
                     st.error(f"Failed to generate dataset: {e}")
-                except boto3.exceptions.S3UploadFailedError as e:
-                    st.error(f"Failed to download CSV from S3: {e}")
-                except Exception as e:
-                    st.error(f"Unexpected error: {e}")
+
 
 
 # ==========================================================
