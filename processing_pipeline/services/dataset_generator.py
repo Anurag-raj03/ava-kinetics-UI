@@ -221,9 +221,8 @@
 
 
 
-
 # ========================================
-# services/dataset_generator.py (Fixed)
+# services/dataset_generator.py (Updated)
 # ========================================
 import psycopg2
 import pandas as pd
@@ -290,49 +289,58 @@ class DatasetGenerator:
         # Parse S3 URL
         parsed = urlparse(manifest_path)
         self.bucket = parsed.netloc
-        self.manifest_key = parsed.path.lstrip("/")
+        self.prefix = parsed.path.lstrip("/")  # Can be a folder
         self.s3_client = boto3.client("s3")
 
-        # Local temp manifest file
-        self.local_manifest_file = f"/tmp/manifest_{project_id}.json"
+        # Local temp folder for manifests
+        self.local_manifest_folder = f"/tmp/manifests_{project_id}"
+        os.makedirs(self.local_manifest_folder, exist_ok=True)
 
-        # Load manifest locally
-        self.manifest_data = self._download_and_load_manifest()
+        # Load all manifests from S3
+        self.manifest_data = self._download_and_load_all_manifests()
         logger.info(f"📦 Loaded manifest with {len(self.manifest_data)} entries from {self.manifest_path}")
 
     # =============================
-    # Manifest Download + Load
+    # Download & Load Manifests
     # =============================
-    def _download_and_load_manifest(self) -> Dict[str, Any]:
-        """Download manifest from S3 → store locally → load JSON → return dict."""
+    def _download_and_load_all_manifests(self) -> Dict[str, Any]:
+        """Download all JSON manifests from an S3 folder and merge into a single dict."""
+        manifest_data = {}
+
         try:
-            logger.info(f"📥 Downloading manifest from S3: s3://{self.bucket}/{self.manifest_key}")
-            self.s3_client.download_file(self.bucket, self.manifest_key, self.local_manifest_file)
+            logger.info(f"📥 Listing manifest files in s3://{self.bucket}/{self.prefix}")
+            paginator = self.s3_client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
 
-            with open(self.local_manifest_file, "r") as f:
-                manifest_data = json.load(f)
+            file_count = 0
+            for page in pages:
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if key.endswith(".json"):
+                        local_file = os.path.join(self.local_manifest_folder, os.path.basename(key))
+                        self.s3_client.download_file(self.bucket, key, local_file)
+                        file_count += 1
 
-            if isinstance(manifest_data, dict):
-                return manifest_data
+                        with open(local_file, "r") as f:
+                            data = json.load(f)
+                            if isinstance(data, dict):
+                                manifest_data.update(data)
+                            elif isinstance(data, list):
+                                for entry in data:
+                                    k = (
+                                        entry.get("keyframe_name")
+                                        or entry.get("frame_name")
+                                        or entry.get("image_name")
+                                        or entry.get("file_name")
+                                    )
+                                    if k:
+                                        manifest_data[k] = entry
 
-            elif isinstance(manifest_data, list):
-                result = {}
-                for entry in manifest_data:
-                    key = (
-                        entry.get("keyframe_name")
-                        or entry.get("frame_name")
-                        or entry.get("image_name")
-                        or entry.get("file_name")
-                    )
-                    if key:
-                        result[key] = entry
-                return result
-
-            logger.warning(f"⚠️ Unexpected manifest format: {type(manifest_data)}")
-            return {}
+            logger.info(f"✅ Downloaded and merged {file_count} manifest files")
+            return manifest_data
 
         except Exception as e:
-            logger.error(f"❌ Error downloading or loading manifest: {e}", exc_info=True)
+            logger.error(f"❌ Error downloading or loading manifests: {e}", exc_info=True)
             return {}
 
     # =============================
@@ -438,8 +446,10 @@ class DatasetGenerator:
             logger.info(f"💾 Dataset saved successfully at: {output_path}")
 
         finally:
-            # Always close DB + delete temp manifest
+            # Always close DB + cleanup
             self.close_db()
-            if os.path.exists(self.local_manifest_file):
-                os.remove(self.local_manifest_file)
-                logger.info(f"🧹 Deleted temporary manifest file: {self.local_manifest_file}")
+            if os.path.exists(self.local_manifest_folder):
+                for f in os.listdir(self.local_manifest_folder):
+                    os.remove(os.path.join(self.local_manifest_folder, f))
+                os.rmdir(self.local_manifest_folder)
+                logger.info(f"🧹 Deleted temporary manifest folder: {self.local_manifest_folder}")
